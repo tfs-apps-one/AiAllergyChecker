@@ -15,11 +15,12 @@
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
-        android:icon="@drawable/ac_512"
+        android:icon="@drawable/ac2_512"
         android:label="@string/app_name"
-        android:roundIcon="@drawable/ac_512"
+        android:roundIcon="@drawable/ac2_512"
         android:supportsRtl="true"
         android:theme="@style/Theme.AiAllergyChecker"
+        android:extractNativeLibs="false"
         tools:targetApi="31">
         <activity
             android:name=".MainActivity"
