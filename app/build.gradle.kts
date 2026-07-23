@@ -4,14 +4,14 @@ plugins {
 
 android {
     namespace = "tfsapps.aiallergychecker"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "tfsapps.aiallergychecker"
         minSdk = 28
-        targetSdk = 35
-        versionCode = 4
-        versionName = "1.3"
+        targetSdk = 36
+        versionCode = 5
+        versionName = "1.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -52,6 +52,10 @@ dependencies {
     implementation(libs.camerax.camera2)
     implementation(libs.camerax.lifecycle)
     implementation(libs.camerax.view)
+
+    // ProcessCameraProvider.getInstance() returns com.google.common.util.concurrent.ListenableFuture;
+    // CameraX 1.6.0 no longer pulls this in transitively, so it must be declared explicitly.
+    implementation(libs.guava)
 
     // ML Kit – Japanese Text Recognition
     implementation("com.google.mlkit:text-recognition-japanese:16.0.1")
