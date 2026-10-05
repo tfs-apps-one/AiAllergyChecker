@@ -7,13 +7,41 @@
     <string name="rate_dialog_rate">評価する</string>
     <string name="rate_dialog_never">今後表示しない</string>
 
+    <!-- ═══ 設定 / 拡張モード（20品目追加） ═══ -->
+    <string name="settings_title">設定</string>
+    <string name="settings_expand_title">拡張モード</string>
+    <string name="settings_expand_desc">特定原材料に準ずるもの20品目を追加して、計29品目を検出します。動画を1本見ると24時間使えます。</string>
+    <string name="settings_expand_items_header">追加される20品目</string>
+    <string name="settings_expand_items">肉類　　　牛肉・鶏肉・豚肉\n魚介類　　あわび・いか・いくら・さけ・さば\n豆・種実類　大豆・ごま・アーモンド・マカダミアナッツ\n果物・野菜　オレンジ・キウイフルーツ・バナナ・もも・りんご・やまいも\nその他　　ピスタチオ・ゼラチン</string>
+    <string name="settings_expand_note">※ 解放中はスイッチでいつでも 9品目 ⇄ 29品目 を切り替えられます。24時間が経過すると自動的に9品目に戻ります。</string>
+    <string name="settings_close">閉じる</string>
+    <string name="settings_display_title">表示モード</string>
+    <string name="settings_display_desc">「検出のみ」にすると、見つかったアレルゲンだけを大きな文字で表示します。小さな文字が読みづらいときにおすすめです。</string>
+    <string name="settings_display_all">全品目表示</string>
+    <string name="settings_display_detected">検出のみ表示</string>
+    <string name="detected_only_empty">対象品目は未検出</string>
+    <string name="detected_only_empty_note">※ 最終判断は必ず原材料表示を目視で確認してください</string>
+    <string name="expand_status_locked">LOCKED ─ 動画視聴で24時間解放</string>
+    <string name="expand_status_unlocked">UNLOCKED ─ 残り %1$s</string>
+    <string name="reward_confirm_title">20品目を24時間解放</string>
+    <string name="reward_confirm_message">短い動画広告を最後まで視聴すると、拡張モード（29品目検出）が24時間使えるようになります。</string>
+    <string name="reward_confirm_watch">動画を見る</string>
+    <string name="reward_confirm_cancel">キャンセル</string>
+    <string name="reward_loading">動画を読み込み中…</string>
+    <string name="reward_load_failed">動画を読み込めませんでした。通信環境を確認して、しばらくしてからお試しください。</string>
+    <string name="reward_not_earned">動画を最後まで視聴すると解放されます。</string>
+    <string name="reward_granted">拡張モードを24時間解放しました（29品目）</string>
+    <string name="expand_expired">拡張モードの有効期限が切れたため、9品目に戻しました</string>
+
     <!-- ═══ AdMob ═══
-         現在は Google 公式のテスト用 ID です。
-         リリース前に本番のアプリ ID / 広告ユニット ID に差し替えてください。 -->
+         バナー：本番 ID
+         リワード：Google 公式のテスト用 ID（リリース前に本番の広告ユニット ID に差し替えてください） -->
     <string name="admob_app_id" translatable="false">ca-app-pub-4924620089567925~9406941098</string>
     <string name="admob_banner_unit_id" translatable="false">ca-app-pub-4924620089567925/3020045386</string>
+    <string name="admob_rewarded_unit_id" translatable="false">ca-app-pub-4924620089567925/4262265867</string>
     <!--
     <string name="admob_app_id" translatable="false">ca-app-pub-3940256099942544~3347511713</string>
     <string name="admob_banner_unit_id" translatable="false">ca-app-pub-3940256099942544/9214589741</string>
+    <string name="admob_rewarded_unit_id" translatable="false">ca-app-pub-3940256099942544/5224354917</string>
     -->
 </resources>

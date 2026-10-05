@@ -32,7 +32,8 @@ import java.util.Set;
  * For every frame:
  *  1. Creates an InputImage from the ImageProxy (with rotation metadata).
  *  2. Runs the Japanese TextRecognizer.
- *  3. Scans every recognized Text.Line for the 9 major Japanese allergen keywords.
+ *  3. Scans every recognized Text.Line for the currently-active allergen keywords
+ *     (9 basic items, or 9 + 20 when the expanded mode is unlocked).
  *  4. Collects matching bounding boxes (Rect, in sensor/image coordinates) and
  *     the set of allergen indices that were found.
  *  5. Fires {@link AllergenCallback#onAllergenDetected} with the results so the
@@ -46,36 +47,145 @@ public class AllergyAnalyzer implements ImageAnalysis.Analyzer {
     private static final String TAG = "AllergyAnalyzer";
 
     // ── Allergen definitions ──────────────────────────────────────────────────
-    // Index  0 = 卵   (Egg)
-    // Index  1 = 乳   (Milk)
-    // Index  2 = 小麦 (Wheat)
-    // Index  3 = えび (Shrimp)
-    // Index  4 = かに (Crab)
-    // Index  5 = そば (Buckwheat)
-    // Index  6 = 落花生 (Peanut)
-    // Index  7 = くるみ (Walnut)   ← mandatory since April 2025
-    // Index  8 = カシューナッツ (Cashew)
+    //
+    //  [基本 9 品目]  index 0–8   … 常に検出
+    //  [拡張 20 品目] index 9–28  … 特定原材料に準ずるもの（動画視聴で 24 時間解放）
+    //
+    //  Index  0 = 卵          Index  9 = 牛肉        Index 19 = アーモンド
+    //  Index  1 = 乳          Index 10 = 鶏肉        Index 20 = マカダミアナッツ
+    //  Index  2 = 小麦        Index 11 = 豚肉        Index 21 = オレンジ
+    //  Index  3 = えび        Index 12 = あわび      Index 22 = キウイフルーツ
+    //  Index  4 = かに        Index 13 = いか        Index 23 = バナナ
+    //  Index  5 = そば        Index 14 = いくら      Index 24 = もも
+    //  Index  6 = 落花生      Index 15 = さけ        Index 25 = りんご
+    //  Index  7 = くるみ      Index 16 = さば        Index 26 = やまいも
+    //  Index  8 = カシュー    Index 17 = 大豆        Index 27 = ピスタチオ
+    //                         Index 18 = ごま        Index 28 = ゼラチン
+
+    /** Number of allergens that are always detected (特定原材料 8 + カシューナッツ). */
+    public static final int BASIC_COUNT = 9;
 
     private static final String[][] ALLERGEN_KEYWORDS = {
-            /* 0 – Egg       */ {"卵", "たまご", "玉子"},
-            /* 1 – Milk      */ {"乳", "ミルク", "牛乳", "乳成分"},
-            /* 2 – Wheat     */ {"小麦", "こむぎ"},
-            /* 3 – Shrimp    */ {"えび", "エビ", "海老"},
-            /* 4 – Crab      */ {"かに", "カニ", "蟹"},
-            /* 5 – Buckwheat */ {"そば", "ソバ", "蕎麦"},
-            /* 6 – Peanut    */ {"落花生", "ピーナッツ"},
-            /* 7 – Walnut    */ {"くるみ", "クルミ", "胡桃"},
-            /* 8 – Cashew    */ {"カシューナッツ", "かしゅーなっつ"},
+            // ── 基本 9 品目 ──
+            /*  0 – Egg       */ {"卵", "たまご", "玉子"},
+            /*  1 – Milk      */ {"乳", "ミルク", "牛乳", "乳成分"},
+            /*  2 – Wheat     */ {"小麦", "こむぎ"},
+            /*  3 – Shrimp    */ {"えび", "エビ", "海老"},
+            /*  4 – Crab      */ {"かに", "カニ", "蟹"},
+            /*  5 – Buckwheat */ {"そば", "ソバ", "蕎麦"},
+            /*  6 – Peanut    */ {"落花生", "ピーナッツ"},
+            /*  7 – Walnut    */ {"くるみ", "クルミ", "胡桃"},
+            /*  8 – Cashew    */ {"カシューナッツ", "かしゅーなっつ"},
+
+            // ── 拡張 20 品目（特定原材料に準ずるもの）──
+            // 肉類
+            /*  9 – Beef      */ {"牛肉", "ビーフ", "牛脂", "牛エキス", "牛骨"},
+            /* 10 – Chicken   */ {"鶏肉", "とり肉", "チキン", "鶏エキス", "鶏ガラ", "鶏脂", "鶏がら",
+                                  "鶏もも", "鶏むね", "鶏ささみ", "鶏皮", "鶏ミンチ"},
+            /* 11 – Pork      */ {"豚", "ポーク", "ぶた肉"},
+            // 魚介類
+            /* 12 – Abalone   */ {"あわび", "アワビ", "鮑"},
+            /* 13 – Squid     */ {"いか", "イカ", "烏賊"},
+            /* 14 – Roe       */ {"いくら", "イクラ"},
+            /* 15 – Salmon    */ {"さけ", "サケ", "鮭", "サーモン"},
+            /* 16 – Mackerel  */ {"さば", "サバ", "鯖"},
+            // 豆・種実類
+            /* 17 – Soybean   */ {"大豆", "だいず", "ダイズ", "豆乳"},
+            /* 18 – Sesame    */ {"ごま", "ゴマ", "胡麻"},
+            /* 19 – Almond    */ {"アーモンド"},
+            /* 20 – Macadamia */ {"マカダミア", "マカデミア"},
+            // 果物・野菜
+            /* 21 – Orange    */ {"オレンジ"},
+            /* 22 – Kiwi      */ {"キウイ", "キウィ"},
+            /* 23 – Banana    */ {"バナナ"},
+            /* 24 – Peach     */ {"もも", "モモ", "桃", "ピーチ"},
+            /* 25 – Apple     */ {"りんご", "リンゴ", "林檎", "アップル"},
+            /* 26 – Yam       */ {"やまいも", "ヤマイモ", "山芋", "山いも", "長芋", "長いも",
+                                  "ながいも", "大和芋", "とろろ"},
+            // その他
+            /* 27 – Pistachio */ {"ピスタチオ"},
+            /* 28 – Gelatin   */ {"ゼラチン"},
+    };
+
+    /**
+     * Context-exclusion words per allergen (index matches ALLERGEN_KEYWORDS).
+     *
+     * If a keyword occurrence is part of one of these longer words, that occurrence
+     * is ignored. Used to suppress well-known false positives of the new items, e.g.
+     *   「鶏もも肉」→ もも（桃）ではない
+     *   「すいか」  → いか（烏賊）ではない
+     * The basic 9 items intentionally have no exclusions (avoid missing a mandatory allergen).
+     */
+    private static final String[][] ALLERGEN_EXCLUDES = {
+            /*  0 */ {}, /*  1 */ {}, /*  2 */ {}, /*  3 */ {}, /*  4 */ {},
+            /*  5 */ {}, /*  6 */ {}, /*  7 */ {}, /*  8 */ {},
+            /*  9 Beef      */ {},
+            /* 10 Chicken   */ {},
+            /* 11 Pork      */ {},
+            /* 12 Abalone   */ {},
+            /* 13 Squid     */ {"すいか", "スイカ", "西瓜", "いかなご", "イカナゴ"},
+            /* 14 Roe       */ {},
+            /* 15 Salmon    */ {"さける", "サケル"},
+            /* 16 Mackerel  */ {"サバイバル"},
+            /* 17 Soybean   */ {},
+            /* 18 Sesame    */ {"ごまかし"},
+            /* 19 Almond    */ {},
+            /* 20 Macadamia */ {},
+            /* 21 Orange    */ {},
+            /* 22 Kiwi      */ {},
+            /* 23 Banana    */ {},
+            /* 24 Peach     */ {"もも肉", "モモ肉", "すもも", "スモモ", "鶏もも", "鶏モモ"},
+            /* 25 Apple     */ {},
+            /* 26 Yam       */ {},
+            /* 27 Pistachio */ {},
+            /* 28 Gelatin   */ {},
     };
 
     /** Japanese display name for each allergen (index matches ALLERGEN_KEYWORDS). */
     private static final String[] ALLERGEN_NAMES_JA = {
-            "卵", "乳", "小麦", "えび", "かに", "そば", "落花生", "くるみ", "カシューナッツ"
+            "卵", "乳", "小麦", "えび", "かに", "そば", "落花生", "くるみ", "カシューナッツ",
+            "牛肉", "鶏肉", "豚肉",
+            "あわび", "いか", "いくら", "さけ", "さば",
+            "大豆", "ごま", "アーモンド", "マカダミアナッツ",
+            "オレンジ", "キウイフルーツ", "バナナ", "もも", "りんご", "やまいも",
+            "ピスタチオ", "ゼラチン",
+    };
+
+    /** Short Japanese label for the compact (29-item) dashboard. */
+    private static final String[] ALLERGEN_SHORT_JA = {
+            "卵", "乳", "小麦", "えび", "かに", "そば", "落花生", "くるみ", "カシュー",
+            "牛肉", "鶏肉", "豚肉",
+            "あわび", "いか", "いくら", "さけ", "さば",
+            "大豆", "ごま", "アーモンド", "マカダミア",
+            "オレンジ", "キウイ", "バナナ", "もも", "りんご", "やまいも",
+            "ピスタチオ", "ゼラチン",
     };
 
     /** English display name for each allergen (index matches ALLERGEN_KEYWORDS). */
     private static final String[] ALLERGEN_NAMES_EN = {
-            "Egg", "Milk", "Wheat", "Shrimp", "Crab", "Buckwheat", "Peanut", "Walnut", "Cashew"
+            "Egg", "Milk", "Wheat", "Shrimp", "Crab", "Buckwheat", "Peanut", "Walnut", "Cashew",
+            "Beef", "Chicken", "Pork",
+            "Abalone", "Squid", "Salmon roe", "Salmon", "Mackerel",
+            "Soybean", "Sesame", "Almond", "Macadamia",
+            "Orange", "Kiwi", "Banana", "Peach", "Apple", "Yam",
+            "Pistachio", "Gelatin",
+    };
+
+    /** Category of each allergen — used for the colour accent on the dashboard. */
+    public static final int CAT_BASIC   = 0;
+    public static final int CAT_MEAT    = 1;
+    public static final int CAT_SEAFOOD = 2;
+    public static final int CAT_NUTS    = 3;
+    public static final int CAT_FRUIT   = 4;
+    public static final int CAT_OTHER   = 5;
+
+    private static final int[] ALLERGEN_CATEGORY = {
+            0, 0, 0, 0, 0, 0, 0, 0, 0,
+            1, 1, 1,
+            2, 2, 2, 2, 2,
+            3, 3, 3, 3,
+            4, 4, 4, 4, 4, 4,
+            5, 5,
     };
 
     // ── AllergenBox ───────────────────────────────────────────────────────────
@@ -94,7 +204,7 @@ public class AllergyAnalyzer implements ImageAnalysis.Analyzer {
         /** Element-level OCR confidence: 0.0 (lowest) … 1.0 (highest). */
         public final float confidence;
         /**
-         * Index into ALLERGEN_KEYWORDS (0–8).
+         * Index into ALLERGEN_KEYWORDS (0–28).
          * -1 when allergen index is not yet assigned (internal use in findKeywordBox).
          */
         public final int   allergenIndex;
@@ -124,7 +234,7 @@ public class AllergyAnalyzer implements ImageAnalysis.Analyzer {
      * The Activity should dispatch UI updates to the main thread itself.
      *
      * @param allergenBoxes   Bounding boxes + confidence for each matched element.
-     * @param detectedIndices Indices (0–8) of allergens found in this frame.
+     * @param detectedIndices Indices of allergens found in this frame.
      * @param imageWidth      ImageProxy width  (sensor orientation, before rotation).
      * @param imageHeight     ImageProxy height (sensor orientation, before rotation).
      * @param rotationDegrees Rotation from CameraX (0 / 90 / 180 / 270).
@@ -144,11 +254,22 @@ public class AllergyAnalyzer implements ImageAnalysis.Analyzer {
     private final TextRecognizer   mRecognizer;
     private final AllergenCallback mCallback;
 
+    /** Number of allergens scanned per frame (BASIC_COUNT or getAllergenCount()). */
+    private volatile int mActiveCount = BASIC_COUNT;
+
     // ── Constructor ───────────────────────────────────────────────────────────
 
     public AllergyAnalyzer(@NonNull AllergenCallback callback) {
         mRecognizer = TextRecognition.getClient(new JapaneseTextRecognizerOptions.Builder().build());
         mCallback   = callback;
+    }
+
+    /**
+     * Switch between the basic 9 items and the expanded 29 items.
+     * Safe to call from any thread; takes effect from the next frame.
+     */
+    public void setActiveCount(int count) {
+        mActiveCount = Math.max(1, Math.min(count, ALLERGEN_KEYWORDS.length));
     }
 
     // ── ImageAnalysis.Analyzer ────────────────────────────────────────────────
@@ -196,6 +317,8 @@ public class AllergyAnalyzer implements ImageAnalysis.Analyzer {
     private void processResult(@NonNull Text visionText,
                                int imageWidth, int imageHeight, int rotationDegrees) {
 
+        final int activeCount = mActiveCount;
+
         // Map: allergen index → topmost AllergenBox found so far
         Map<Integer, AllergenBox> bestBox      = new HashMap<>();
         Set<Integer>              detectedIndices = new HashSet<>();
@@ -205,12 +328,13 @@ public class AllergyAnalyzer implements ImageAnalysis.Analyzer {
 
                 String lineText = line.getText();
 
-                for (int i = 0; i < ALLERGEN_KEYWORDS.length; i++) {
+                for (int i = 0; i < activeCount; i++) {
+                    final String[] excludes = ALLERGEN_EXCLUDES[i];
                     for (String keyword : ALLERGEN_KEYWORDS[i]) {
-                        if (containsAllergenKeyword(lineText, keyword)) {
+                        if (containsAllergenKeyword(lineText, keyword, excludes)) {
                             detectedIndices.add(i);
 
-                            AllergenBox ab = findKeywordBox(line.getElements(), keyword);
+                            AllergenBox ab = findKeywordBox(line.getElements(), keyword, excludes);
                             if (ab != null) {
                                 // Attach allergen index and keep only the topmost box
                                 AllergenBox abIndexed = new AllergenBox(ab.rect, ab.confidence, i);
@@ -235,10 +359,17 @@ public class AllergyAnalyzer implements ImageAnalysis.Analyzer {
 
     // ── Keyword matching ──────────────────────────────────────────────────────
 
+    /** Backwards-compatible overload (no exclusion words). */
+    static boolean containsAllergenKeyword(@NonNull String text,
+                                           @NonNull String keyword) {
+        return containsAllergenKeyword(text, keyword, new String[0]);
+    }
+
     /**
      * Returns true if {@code text} contains {@code keyword} in a context that
      * looks like a genuine allergen declaration — i.e. the keyword is NOT
-     * buried inside a katakana loanword compound on both sides.
+     * buried inside a katakana loanword compound on both sides, and is NOT
+     * part of one of the {@code excludes} words.
      *
      * <h3>Root cause this solves</h3>
      * ML Kit OCR sometimes confuses the katakana long-vowel mark「ー」(U+30FC)
@@ -265,13 +396,33 @@ public class AllergyAnalyzer implements ImageAnalysis.Analyzer {
      * a valid match to be discarded.
      */
     static boolean containsAllergenKeyword(@NonNull String text,
-                                           @NonNull String keyword) {
+                                           @NonNull String keyword,
+                                           @NonNull String[] excludes) {
         int idx = 0;
         while ((idx = text.indexOf(keyword, idx)) >= 0) {
-            if (!isSurroundedByKatakana(text, idx, keyword.length())) {
+            if (!isSurroundedByKatakana(text, idx, keyword.length())
+                    && !isPartOfExcludedWord(text, idx, keyword, excludes)) {
                 return true; // genuine occurrence found
             }
             idx += keyword.length();
+        }
+        return false;
+    }
+
+    /**
+     * Returns true when the occurrence of {@code keyword} at {@code idx} is part of
+     * one of the {@code excludes} words (e.g. 「もも」inside「鶏もも肉」).
+     */
+    private static boolean isPartOfExcludedWord(@NonNull String text, int idx,
+                                                @NonNull String keyword,
+                                                @NonNull String[] excludes) {
+        for (String ex : excludes) {
+            int k = ex.indexOf(keyword);
+            while (k >= 0) {
+                int start = idx - k;
+                if (start >= 0 && text.startsWith(ex, start)) return true;
+                k = ex.indexOf(keyword, k + 1);
+            }
         }
         return false;
     }
@@ -317,11 +468,12 @@ public class AllergyAnalyzer implements ImageAnalysis.Analyzer {
      *         located at element level.
      */
     private static AllergenBox findKeywordBox(@NonNull List<Text.Element> elements,
-                                              @NonNull String keyword) {
+                                              @NonNull String keyword,
+                                              @NonNull String[] excludes) {
 
         // Pass 1: keyword is wholly inside a single element
         for (Text.Element element : elements) {
-            if (containsAllergenKeyword(element.getText(), keyword)) {
+            if (containsAllergenKeyword(element.getText(), keyword, excludes)) {
                 Rect box = element.getBoundingBox();
                 if (box != null) {
                     return new AllergenBox(new Rect(box), element.getConfidence());
@@ -350,7 +502,7 @@ public class AllergyAnalyzer implements ImageAnalysis.Analyzer {
                 }
                 minConf = Math.min(minConf, elem.getConfidence());
 
-                if (containsAllergenKeyword(sb.toString(), keyword)) {
+                if (containsAllergenKeyword(sb.toString(), keyword, excludes)) {
                     return (union != null) ? new AllergenBox(union, minConf) : null;
                 }
             }
@@ -368,7 +520,10 @@ public class AllergyAnalyzer implements ImageAnalysis.Analyzer {
 
     // ── Static accessors (used by MainActivity to build the dashboard) ────────
 
-    public static String[] getAllergenNamesJa() { return ALLERGEN_NAMES_JA; }
+    public static String[] getAllergenNamesJa()  { return ALLERGEN_NAMES_JA; }
+    public static String[] getAllergenShortJa()  { return ALLERGEN_SHORT_JA; }
     public static String[] getAllergenNamesEn()  { return ALLERGEN_NAMES_EN; }
+    public static int      getCategory(int i)    { return ALLERGEN_CATEGORY[i]; }
+    /** Total number of defined allergens (basic + expanded = 29). */
     public static int getAllergenCount()          { return ALLERGEN_KEYWORDS.length; }
 }
