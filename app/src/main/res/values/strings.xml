@@ -1,3 +1,19 @@
 <resources>
     <string name="app_name">AIアレルギーチェッカー</string>
+
+    <!-- ═══ 評価のお願いダイアログ ═══ -->
+    <string name="rate_dialog_title">アプリの評価のお願い</string>
+    <string name="rate_dialog_message">いつも「AIアレルギーチェッカー」をご利用いただき、ありがとうございます。\n\nこのアプリは個人で開発・運営しています。よろしければ Google Play で率直なご感想や評価をお聞かせください。\nいただいた声は、今後の改善の大きな励みになります。</string>
+    <string name="rate_dialog_rate">評価する</string>
+    <string name="rate_dialog_never">今後表示しない</string>
+
+    <!-- ═══ AdMob ═══
+         現在は Google 公式のテスト用 ID です。
+         リリース前に本番のアプリ ID / 広告ユニット ID に差し替えてください。 -->
+    <string name="admob_app_id" translatable="false">ca-app-pub-4924620089567925~9406941098</string>
+    <string name="admob_banner_unit_id" translatable="false">ca-app-pub-4924620089567925/3020045386</string>
+    <!--
+    <string name="admob_app_id" translatable="false">ca-app-pub-3940256099942544~3347511713</string>
+    <string name="admob_banner_unit_id" translatable="false">ca-app-pub-3940256099942544/9214589741</string>
+    -->
 </resources>

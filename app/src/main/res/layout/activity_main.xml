@@ -63,4 +63,15 @@
         android:columnCount="3"
         android:padding="6dp" />
 
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!--  BOTTOM — AdMob アンカー型アダプティブバナー                  -->
+    <!--  カメラ/グリッドには重ねず、独立した行として配置。             -->
+    <!--  AdView は MainActivity.loadBannerAd() で追加する。          -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <FrameLayout
+        android:id="@+id/ad_container"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@android:color/black" />
+
 </LinearLayout>

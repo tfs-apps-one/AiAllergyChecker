@@ -2,7 +2,10 @@ package tfsapps.aiallergychecker;
 
 import android.Manifest;
 import android.content.Context;
+import android.content.ActivityNotFoundException;
+import android.content.Intent;
 import android.content.SharedPreferences;
+import android.net.Uri;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -11,6 +14,8 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 import android.view.Gravity;
+import android.util.DisplayMetrics;
+import android.widget.FrameLayout;
 import android.widget.GridLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -33,6 +38,10 @@ import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 
+import com.google.android.gms.ads.AdRequest;
+import com.google.android.gms.ads.AdSize;
+import com.google.android.gms.ads.AdView;
+import com.google.android.gms.ads.MobileAds;
 import com.google.common.util.concurrent.ListenableFuture;
 
 import java.util.ArrayList;
@@ -77,6 +86,16 @@ public class MainActivity extends AppCompatActivity
     private static final String PREFS_NAME        = "AllergyCheckerPrefs";
     private static final String KEY_TERMS_AGREED  = "terms_agreed";
 
+    /** SharedPreferences キー：起動回数 / 評価ダイアログを今後出さないフラグ */
+    private static final String KEY_LAUNCH_COUNT       = "launch_count";
+    private static final String KEY_RATE_DIALOG_DONE   = "rate_dialog_done";
+
+    /** この回数以上起動したユーザーに評価ダイアログを表示する */
+    private static final int  RATE_DIALOG_MIN_LAUNCHES = 3;
+
+    /** 起動直後のカメラ立ち上げと重ならないよう、少し遅らせて表示する */
+    private static final long RATE_DIALOG_DELAY_MS     = 1500;
+
     /**
      * How long (ms) an allergen card / confirmed AR box stays active after the
      * last frame it was detected in.
@@ -102,6 +121,11 @@ public class MainActivity extends AppCompatActivity
     private PreviewView       mPreviewView;
     private CustomOverlayView mOverlayView;
     private GridLayout        mDashboardGrid;
+    private FrameLayout       mAdContainer;
+
+    // ── AdMob ─────────────────────────────────────────────────────────────────
+    private AdView  mAdView;
+    private boolean mAdLoadRequested = false;
 
     // ── Dashboard cards (one per allergen, index 0–8) ─────────────────────────
     private TextView[] mAllergenCards;
@@ -153,6 +177,7 @@ public class MainActivity extends AppCompatActivity
         mPreviewView   = findViewById(R.id.preview_view);
         mOverlayView   = findViewById(R.id.overlay_view);
         mDashboardGrid = findViewById(R.id.dashboard_grid);
+        mAdContainer   = findViewById(R.id.ad_container);
 
         mCameraExecutor = Executors.newSingleThreadExecutor();
 
@@ -167,10 +192,119 @@ public class MainActivity extends AppCompatActivity
 
         // 初回起動かどうかチェック → 未同意なら利用規約ダイアログを表示
         SharedPreferences prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+
+        // 起動回数をカウント（画面再生成時は数えない）
+        if (savedInstanceState == null) {
+            int launches = prefs.getInt(KEY_LAUNCH_COUNT, 0) + 1;
+            prefs.edit().putInt(KEY_LAUNCH_COUNT, launches).apply();
+        }
+
         if (!prefs.getBoolean(KEY_TERMS_AGREED, false)) {
             showTermsDialog();
         } else {
             requestCameraOrStart();
+            if (savedInstanceState == null) {
+                maybeShowRateDialog(prefs);
+            }
+        }
+
+        // 広告 SDK の初期化はバックグラウンドで（起動・カメラを遅らせない）
+        new Thread(() -> MobileAds.initialize(this, status -> {})).start();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  AdMob アダプティブバナー
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * 画面最下部にアンカー型アダプティブバナーを読み込む。
+     * 利用規約同意後（カメラ起動時）に一度だけ呼ばれる。
+     */
+    private void loadBannerAd() {
+        if (mAdLoadRequested || mAdContainer == null) return;
+        mAdLoadRequested = true;
+
+        // コンテナの幅が確定してからサイズを決める
+        mAdContainer.post(() -> {
+            if (isFinishing() || isDestroyed()) return;
+
+            mAdView = new AdView(this);
+            mAdView.setAdUnitId(getString(R.string.admob_banner_unit_id));
+            mAdView.setAdSize(getAdaptiveBannerSize());
+
+            mAdContainer.removeAllViews();
+            mAdContainer.addView(mAdView);
+            mAdView.loadAd(new AdRequest.Builder().build());
+        });
+    }
+
+    /** コンテナ幅（取得できなければ画面幅）からアダプティブバナーのサイズを算出。 */
+    private AdSize getAdaptiveBannerSize() {
+        DisplayMetrics metrics = getResources().getDisplayMetrics();
+        float widthPx = mAdContainer.getWidth();
+        if (widthPx <= 0) widthPx = metrics.widthPixels;
+        int adWidthDp = (int) (widthPx / metrics.density);
+        return AdSize.getCurrentOrientationAnchoredAdaptiveBannerAdSize(this, adWidthDp);
+    }
+
+    @Override
+    protected void onPause() {
+        if (mAdView != null) mAdView.pause();
+        super.onPause();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (mAdView != null) mAdView.resume();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  アプリ評価のお願いダイアログ（3回以上起動したユーザーのみ）
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * 起動回数が RATE_DIALOG_MIN_LAUNCHES 以上で、まだ「評価する」「今後表示しない」の
+     * どちらも押していなければ評価ダイアログを表示する。
+     *
+     * Google Play ポリシー対応：
+     *  ・特典や報酬と引き換えに評価を求めない
+     *  ・特定の星の数（★5 など）を求めない
+     */
+    private void maybeShowRateDialog(@NonNull SharedPreferences prefs) {
+        if (prefs.getBoolean(KEY_RATE_DIALOG_DONE, false)) return;
+        if (prefs.getInt(KEY_LAUNCH_COUNT, 0) < RATE_DIALOG_MIN_LAUNCHES) return;
+
+        mHandler.postDelayed(() -> {
+            if (isFinishing() || isDestroyed()) return;
+
+            new AlertDialog.Builder(this)
+                    .setTitle(R.string.rate_dialog_title)
+                    .setMessage(R.string.rate_dialog_message)
+                    .setCancelable(false)
+                    .setPositiveButton(R.string.rate_dialog_rate, (d, w) -> {
+                        markRateDialogDone(prefs);
+                        openPlayStorePage();
+                    })
+                    .setNegativeButton(R.string.rate_dialog_never, (d, w) ->
+                            markRateDialogDone(prefs))
+                    .show();
+        }, RATE_DIALOG_DELAY_MS);
+    }
+
+    private void markRateDialogDone(@NonNull SharedPreferences prefs) {
+        prefs.edit().putBoolean(KEY_RATE_DIALOG_DONE, true).apply();
+    }
+
+    /** Google Play のアプリページを開く（Play ストアアプリが無ければブラウザで開く）。 */
+    private void openPlayStorePage() {
+        String pkg = getPackageName();
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW,
+                    Uri.parse("market://details?id=" + pkg)));
+        } catch (ActivityNotFoundException e) {
+            startActivity(new Intent(Intent.ACTION_VIEW,
+                    Uri.parse("https://play.google.com/store/apps/details?id=" + pkg)));
         }
     }
 
@@ -237,6 +371,10 @@ public class MainActivity extends AppCompatActivity
 
     @Override
     protected void onDestroy() {
+        if (mAdView != null) {
+            mAdView.destroy();
+            mAdView = null;
+        }
         super.onDestroy();
         mHandler.removeCallbacksAndMessages(null);
         mCameraExecutor.shutdown();
@@ -284,6 +422,8 @@ public class MainActivity extends AppCompatActivity
     // ─────────────────────────────────────────────────────────────────────────
 
     private void startCamera() {
+        loadBannerAd();
+
         ListenableFuture<ProcessCameraProvider> providerFuture =
                 ProcessCameraProvider.getInstance(this);
 

@@ -10,8 +10,8 @@ android {
         applicationId = "tfsapps.aiallergychecker"
         minSdk = 28
         targetSdk = 36
-        versionCode = 5
-        versionName = "1.4"
+        versionCode = 6
+        versionName = "1.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -59,6 +59,9 @@ dependencies {
 
     // ML Kit – Japanese Text Recognition
     implementation("com.google.mlkit:text-recognition-japanese:16.0.1")
+
+    // Google AdMob（アダプティブバナー）
+    implementation(libs.play.services.ads)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.ext.junit)
