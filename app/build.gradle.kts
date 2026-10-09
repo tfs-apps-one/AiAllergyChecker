@@ -10,8 +10,8 @@ android {
         applicationId = "tfsapps.aiallergychecker"
         minSdk = 28
         targetSdk = 36
-        versionCode = 7
-        versionName = "1.6"
+        versionCode = 9
+        versionName = "1.8"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -62,6 +62,9 @@ dependencies {
 
     // Google AdMob（アダプティブバナー）
     implementation(libs.play.services.ads)
+
+    // Google Play Billing（プレミアムプラン：買い切り）
+    implementation(libs.billing)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.ext.junit)

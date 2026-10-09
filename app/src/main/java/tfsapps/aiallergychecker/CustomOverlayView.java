@@ -59,6 +59,23 @@ public class CustomOverlayView extends View {
     private int                               mImageHeight = 0;
     private int                               mRotation    = 0;
 
+    /**
+     * true  = プレミアム：iOS と同じ「四角囲み」（塗りなし・太めの枠線で文字を囲む）
+     * false = 無料版   ：半透明の塗りつぶし＋細い枠線
+     */
+    private boolean mOutlineOnly = false;
+    private Paint   mHighOutline;   // outline-mode red stroke (density-scaled)
+    private Paint   mLowOutline;    // outline-mode yellow stroke (density-scaled)
+    private float   mOutlinePad;    // gap between the text and the outline
+
+    /**
+     * マイアレルゲン（プレミアム限定）。bit i = allergen index i。
+     * 該当する枠は二重線＋「★ 名前」ラベルで強調し、それ以外は控えめ（半透明）に描く。
+     */
+    private long    mMyMask = 0L;
+    private Paint   mLabelTextPaint;
+    private Paint   mLabelBgPaint;
+
     // ─────────────────────────────────────────────────────────────────────────
     //  Constructors
     // ─────────────────────────────────────────────────────────────────────────
@@ -115,6 +132,20 @@ public class CustomOverlayView extends View {
         invalidate();
     }
 
+    /** マイアレルゲンを設定する（0 = 強調なし）。 */
+    public void setMyMask(long myMask) {
+        if (mMyMask == myMask) return;
+        mMyMask = myMask;
+        invalidate();
+    }
+
+    /** 検出枠の描き方を切り替える（プレミアム = 四角囲み）。 */
+    public void setOutlineOnly(boolean outlineOnly) {
+        if (mOutlineOnly == outlineOnly) return;
+        mOutlineOnly = outlineOnly;
+        invalidate();
+    }
+
     public void clear() {
         mBoxes.clear();
         invalidate();
@@ -150,8 +181,25 @@ public class CustomOverlayView extends View {
                 if (v == null) continue;
 
                 boolean high = box.confidence >= HIGH_CONF;
-                canvas.drawRect(v, high ? mHighConfPaint  : mLowConfPaint);
-                canvas.drawRect(v, high ? mHighConfStroke : mLowConfStroke);
+                boolean mine = box.allergenIndex >= 0
+                        && (mMyMask & (1L << box.allergenIndex)) != 0;
+                if (mine) {
+                    drawMyAllergenBox(canvas, v, high, box.allergenIndex, vW);
+                    continue;
+                }
+                // マイアレルゲン設定中は、それ以外の枠を控えめ（半透明）にする
+                boolean dim = mMyMask != 0;
+                if (dim) canvas.saveLayerAlpha(null, 110);
+                if (mOutlineOnly) {
+                    // 四角囲み：文字を隠さないよう塗らず、少し外側に枠線だけを描く
+                    ensureOutlinePaints();
+                    v.inset(-mOutlinePad, -mOutlinePad);
+                    canvas.drawRect(v, high ? mHighOutline : mLowOutline);
+                } else {
+                    canvas.drawRect(v, high ? mHighConfPaint  : mLowConfPaint);
+                    canvas.drawRect(v, high ? mHighConfStroke : mLowConfStroke);
+                }
+                if (dim) canvas.restore();
             }
         }
 
@@ -221,12 +269,7 @@ public class CustomOverlayView extends View {
 
         // RED swatch + label
         float redSwL = zoneL + lPad;
-        canvas.drawRect(redSwL, itemRowMidY - swatchSz / 2f,
-                        redSwL + swatchSz, itemRowMidY + swatchSz / 2f,
-                        mHighConfPaint);
-        canvas.drawRect(redSwL, itemRowMidY - swatchSz / 2f,
-                        redSwL + swatchSz, itemRowMidY + swatchSz / 2f,
-                        mHighConfStroke);
+        drawSwatch(canvas, redSwL, itemRowMidY, swatchSz, true);
         float redTextX = redSwL + swatchSz + swatchGap;
         canvas.drawText("赤：信頼度（高）",
                         redTextX,
@@ -236,16 +279,84 @@ public class CustomOverlayView extends View {
         // YELLOW swatch + label (positioned right of the red item)
         float redItemW   = mLegendTextPaint.measureText("赤：信頼度（高）");
         float yelSwL     = redTextX + redItemW + itemGap;
-        canvas.drawRect(yelSwL, itemRowMidY - swatchSz / 2f,
-                        yelSwL + swatchSz, itemRowMidY + swatchSz / 2f,
-                        mLowConfPaint);
-        canvas.drawRect(yelSwL, itemRowMidY - swatchSz / 2f,
-                        yelSwL + swatchSz, itemRowMidY + swatchSz / 2f,
-                        mLowConfStroke);
+        drawSwatch(canvas, yelSwL, itemRowMidY, swatchSz, false);
         canvas.drawText("黄：信頼度（低）",
                         yelSwL + swatchSz + swatchGap,
                         itemRowMidY - (lfm.ascent + lfm.descent) / 2f,
                         mLegendTextPaint);
+    }
+
+    /**
+     * マイアレルゲンの枠：二重線（外側・内側）＋枠の上に「★ 名前」のラベル。
+     * 色は信頼度（赤 / 黄）のまま、形とラベルで区別する。
+     */
+    private void drawMyAllergenBox(Canvas canvas, RectF v, boolean high, int index, float vW) {
+        ensureOutlinePaints();
+        float density = getResources().getDisplayMetrics().density;
+        Paint stroke  = high ? mHighOutline : mLowOutline;
+
+        RectF inner = new RectF(v);
+        inner.inset(-mOutlinePad, -mOutlinePad);
+        RectF outer = new RectF(inner);
+        outer.inset(-4f * density, -4f * density);
+        canvas.drawRect(inner, stroke);
+        canvas.drawRect(outer, stroke);
+
+        // ラベル「★ 卵」
+        String[] names = AllergyAnalyzer.getAllergenNamesJa();
+        if (index < 0 || index >= names.length) return;
+        String text = "★ " + names[index];
+        mLabelBgPaint.setColor(stroke.getColor());
+        Paint.FontMetrics fm = mLabelTextPaint.getFontMetrics();
+        float padH = 5f * density, padV = 2f * density;
+        float w = mLabelTextPaint.measureText(text) + padH * 2f;
+        float h = (fm.descent - fm.ascent) + padV * 2f;
+        float left = Math.max(0f, Math.min(outer.left, vW - w));
+        float top  = outer.top - h - 2f * density;
+        if (top < 0f) top = outer.bottom + 2f * density;   // 上に入らなければ枠の下へ
+        RectF bg = new RectF(left, top, left + w, top + h);
+        canvas.drawRoundRect(bg, 4f * density, 4f * density, mLabelBgPaint);
+        canvas.drawText(text, left + padH, top + padV - fm.ascent, mLabelTextPaint);
+    }
+
+    /** 凡例の色見本。検出枠と同じ描き方（塗りつぶし / 四角囲み）にそろえる。 */
+    private void drawSwatch(Canvas canvas, float left, float midY, float size, boolean high) {
+        float t = midY - size / 2f;
+        float b = midY + size / 2f;
+        if (mOutlineOnly) {
+            ensureOutlinePaints();
+            Paint stroke = high ? mHighOutline : mLowOutline;
+            float h = stroke.getStrokeWidth() / 2f;   // 枠線が見本サイズからはみ出さないように
+            canvas.drawRect(left + h, t + h, left + size - h, b - h, stroke);
+        } else {
+            canvas.drawRect(left, t, left + size, b, high ? mHighConfPaint  : mLowConfPaint);
+            canvas.drawRect(left, t, left + size, b, high ? mHighConfStroke : mLowConfStroke);
+        }
+    }
+
+    /** 四角囲み用の Paint を画面密度に合わせて生成（初回のみ）。 */
+    private void ensureOutlinePaints() {
+        if (mHighOutline != null) return;
+        float density = getResources().getDisplayMetrics().density;
+        mHighOutline = makeOutlinePaint(Color.rgb(235, 40, 40), 2.5f * density);
+        mLowOutline  = makeOutlinePaint(Color.rgb(240, 190, 0), 2.5f * density);
+        mOutlinePad  = 2f * density;
+
+        mLabelBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        mLabelBgPaint.setStyle(Paint.Style.FILL);
+        mLabelTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        mLabelTextPaint.setColor(Color.WHITE);
+        mLabelTextPaint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        mLabelTextPaint.setTextSize(13f * getResources().getDisplayMetrics().scaledDensity);
+    }
+
+    private static Paint makeOutlinePaint(int color, float width) {
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeJoin(Paint.Join.MITER);
+        p.setColor(color);
+        p.setStrokeWidth(width);
+        return p;
     }
 
     // ─────────────────────────────────────────────────────────────────────────

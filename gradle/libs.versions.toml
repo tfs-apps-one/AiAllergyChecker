@@ -10,6 +10,7 @@ constraintlayout = "2.1.4"
 camerax = "1.6.0"
 guava = "33.6.0-android"
 playServicesAds = "24.4.0"
+billing = "9.1.0"
 
 [libraries]
 junit = { group = "junit", name = "junit", version.ref = "junit" }
@@ -25,6 +26,7 @@ camerax-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", vers
 camerax-view = { group = "androidx.camera", name = "camera-view", version.ref = "camerax" }
 guava = { group = "com.google.guava", name = "guava", version.ref = "guava" }
 play-services-ads = { group = "com.google.android.gms", name = "play-services-ads", version.ref = "playServicesAds" }
+billing = { group = "com.android.billingclient", name = "billing", version.ref = "billing" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

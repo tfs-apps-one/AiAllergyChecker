@@ -40,6 +40,180 @@
             android:textSize="20sp"
             android:textStyle="bold" />
 
+        <!-- ── プレミアムプランカード（買い切り） ── -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:background="@drawable/bg_premium_card"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/premium_title"
+                    android:textColor="#FFF5D06F"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:background="@drawable/bg_tag_premium"
+                    android:paddingStart="6dp"
+                    android:paddingTop="1dp"
+                    android:paddingEnd="6dp"
+                    android:paddingBottom="1dp"
+                    android:text="@string/premium_tag"
+                    android:textColor="#FF1A1300"
+                    android:textSize="11sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:lineSpacingMultiplier="1.4"
+                android:text="@string/premium_benefits"
+                android:textColor="#FFC9D1D9"
+                android:textSize="13sp" />
+
+            <!-- 購入済みのときに表示 -->
+            <TextView
+                android:id="@+id/text_premium_status"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:text="@string/premium_status_owned"
+                android:textColor="#FF3FB950"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                android:visibility="gone" />
+
+            <!-- 価格は Google Play から取得して「￥298 で購入」の形で表示 -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btn_premium_buy"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:layout_marginTop="12dp"
+                android:text="@string/premium_price_loading"
+                android:textColor="#FF1A1300"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                app:backgroundTint="#FFF0B93A"
+                app:cornerRadius="12dp" />
+
+            <TextView
+                android:id="@+id/btn_premium_restore"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center_horizontal"
+                android:layout_marginTop="6dp"
+                android:background="?attr/selectableItemBackground"
+                android:padding="8dp"
+                android:text="@string/premium_restore"
+                android:textColor="#FF8B949E"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <!-- ── マイアレルゲンカード（プレミアム限定） ── -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:background="@drawable/bg_settings_card"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/my_allergen_title"
+                    android:textColor="#E6EDF3"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:background="@drawable/bg_tag_premium"
+                    android:paddingStart="6dp"
+                    android:paddingTop="1dp"
+                    android:paddingEnd="6dp"
+                    android:paddingBottom="1dp"
+                    android:text="PREMIUM"
+                    android:textColor="#FF1A1300"
+                    android:textSize="11sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:lineSpacingMultiplier="1.15"
+                android:text="@string/my_allergen_desc"
+                android:textColor="#8B949E"
+                android:textSize="12sp" />
+
+            <!-- 無料版のみ表示 -->
+            <TextView
+                android:id="@+id/text_my_allergen_lock"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/my_allergen_locked"
+                android:textColor="#FFF5D06F"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:visibility="gone" />
+
+            <!-- 選択チップは MainActivity.buildMyAllergenGrid() で追加 -->
+            <LinearLayout
+                android:id="@+id/my_allergen_grid"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:orientation="vertical" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="@string/my_allergen_vibrate"
+                    android:textColor="#C9D1D9"
+                    android:textSize="13sp" />
+
+                <com.google.android.material.materialswitch.MaterialSwitch
+                    android:id="@+id/switch_my_vibrate"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" />
+            </LinearLayout>
+        </LinearLayout>
+
         <!-- ── 表示モードカード（全品目 / 検出のみ） ── -->
         <LinearLayout
             android:layout_width="match_parent"
@@ -151,6 +325,7 @@
                     </LinearLayout>
 
                     <TextView
+                        android:id="@+id/text_expand_desc"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="4dp"

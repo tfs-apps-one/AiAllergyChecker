@@ -13,9 +13,13 @@ import android.net.Uri;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
+import android.os.VibratorManager;
 import android.text.SpannableStringBuilder;
 import android.text.Spanned;
 import android.text.TextUtils;
@@ -64,8 +68,10 @@ import com.google.android.gms.ads.rewarded.RewardedAd;
 import com.google.android.gms.ads.rewarded.RewardedAdLoadCallback;
 import com.google.android.material.bottomsheet.BottomSheetBehavior;
 import com.google.android.material.bottomsheet.BottomSheetDialog;
+import com.google.android.material.button.MaterialButton;
 import com.google.android.material.button.MaterialButtonToggleGroup;
 import com.google.android.material.materialswitch.MaterialSwitch;
+import com.google.android.material.snackbar.Snackbar;
 import com.google.common.util.concurrent.ListenableFuture;
 
 import java.util.ArrayList;
@@ -89,7 +95,11 @@ import java.util.concurrent.Executors;
  *  3. Dashboard      – "Allergen Monitor": LED chips light up red when detected,
  *                      revert after ALLERGEN_TIMEOUT_MS.
  *  4. Expanded mode  – 設定（歯車）からリワード動画を視聴すると、特定原材料に準ずるもの
- *                      20品目を追加した計29品目を24時間検出できる。
+ *                      20品目を追加した計29品目を1時間検出できる。
+ *                      使用中に時間切れになっても途中では切らず「延長中」と表示し、
+ *                      アプリがバックグラウンドに回ったとき（onStop）に9品目へ戻す。
+ *  5. Premium plan   – 買い切り（価格は Google Play から取得）。広告非表示・拡張モード無期限・
+ *                      検出文字の四角囲み表示（iOS と同じ）を解放する。BillingManager を参照。
  *
  * Box stability filter (key behaviour change):
  *  • AllergyAnalyzer emits one box per allergen per frame (topmost occurrence).
@@ -125,8 +135,8 @@ public class MainActivity extends AppCompatActivity
     /** SharedPreferences キー：表示モード（true = 検出したアレルゲンだけを大きく表示） */
     private static final String KEY_DETECTED_ONLY  = "display_detected_only";
 
-    /** リワード動画 1 回で解放される時間 */
-    private static final long EXPAND_DURATION_MS = 24L * 60 * 60 * 1000;
+    /** リワード動画 1 回で解放される時間（1時間） */
+    private static final long EXPAND_DURATION_MS = 60L * 60 * 1000;
 
     /** この回数以上起動したユーザーに評価ダイアログを表示する */
     private static final int  RATE_DIALOG_MIN_LAUNCHES = 3;
@@ -147,6 +157,22 @@ public class MainActivity extends AppCompatActivity
      * reject one-off disclaimer detections.
      */
     private static final int STABILITY_REQUIRED = 2;
+
+    /**
+     * SharedPreferences キー：マイアレルゲン（プレミアム限定）。bit i = allergen index i。
+     * 将来の家族プロファイル対応に備え、プロファイル 0 番として保存する。
+     */
+    private static final String KEY_MY_ALLERGENS = "my_allergens_p0";
+    /** SharedPreferences キー：マイアレルゲン検出時に振動するか */
+    private static final String KEY_MY_VIBRATE   = "my_allergen_vibrate";
+    /** 同じマイアレルゲンで再び振動するまでの間隔（ちらつきで何度も震えないように） */
+    private static final long   MY_VIBRATE_INTERVAL_MS = 10_000;
+
+    /** 検出のみ表示で、スクロールせずに一画面へ収める最低件数（2 列 × 5 行 = 10 件）。 */
+    private static final int DETECTED_MIN_VISIBLE = 10;
+    private static final int DETECTED_COLS        = 2;
+    /** 検出のみ表示の 1 行の最大の高さ（件数が少ないときはこの高さで大きく表示） */
+    private static final int DETECTED_ROW_MAX_DP  = 66;
 
     /**
      * Maximum Y-centre shift (as a fraction of imageHeight) that is still treated
@@ -187,9 +213,40 @@ public class MainActivity extends AppCompatActivity
     private TextView          mExpandStatus;
     private boolean           mSuppressSwitchCallback = false;
 
+    // ── プレミアムプラン（買い切り） ────────────────────────────────────────────
+    private BillingManager mBilling;
+    /** true = 購入済み（広告非表示・拡張モード無期限・四角囲み表示） */
+    private boolean        mPremium       = false;
+    /** カメラ（＝バナー広告）を起動済みか。購入取り消し時に広告を再表示するために使う */
+    private boolean        mCameraStarted = false;
+    private MaterialButton mPremiumBuyBtn;
+    private TextView       mPremiumStatus;
+    private View           mPremiumRestore;
+    private TextView       mExpandDesc;
+
+    // ── マイアレルゲン（プレミアム限定） ──────────────────────────────────────────
+    /** 登録したマイアレルゲン（保存値）。表示に使うのは effectiveMyMask()。 */
+    private long    mMyMask     = 0L;
+    private boolean mMyVibrate  = true;
+    /** 直前の更新で検出中だったマイアレルゲン（新たに見つかった瞬間を判定する） */
+    private long    mMyActivePrev = 0L;
+    private final long[] mMyVibratedMs = new long[TOTAL_COUNT];
+    private LinearLayout   mMyAllergenGrid;
+    private View           mMyAllergenLock;
+    private MaterialSwitch mMyVibrateSwitch;
+
     // ── Mode ──────────────────────────────────────────────────────────────────
     /** true = 29 品目（拡張モード）, false = 9 品目 */
     private boolean mExpanded = false;
+
+    /**
+     * true = 解放時間は終了したが、使用中なので 29 品目を継続している「延長中」。
+     * アプリがバックグラウンドに回った時点（onStop）で 9 品目に戻す。
+     */
+    private boolean mGraceActive = false;
+
+    /** 延長中にバックグラウンドで 9 品目へ戻した → 次に画面へ戻ったときに知らせる */
+    private boolean mNotifyExpiredOnResume = false;
 
     /** true = 検出したアレルゲンだけを大きな文字で表示 / false = 全品目を一覧表示 */
     private boolean mDetectedOnly = false;
@@ -239,6 +296,7 @@ public class MainActivity extends AppCompatActivity
     private static final int LED_ALERT          = Color.parseColor("#FFFF3B30");
     private static final int ACCENT_RED         = Color.parseColor("#FFFF6B6B");
     private static final int ACCENT_AMBER       = Color.parseColor("#FFFFC857");
+    private static final int ACCENT_GOLD        = Color.parseColor("#FFF5D06F");
 
     /** LED colour per category (CAT_BASIC … CAT_OTHER). */
     private static final int[] CATEGORY_COLORS = {
@@ -275,6 +333,16 @@ public class MainActivity extends AppCompatActivity
         mDashboardPanel   = findViewById(R.id.dashboard_panel);
         mDashboardContent = findViewById(R.id.dashboard_content);
         mDashboardScroll  = findViewById(R.id.dashboard_scroll);
+        // 検出のみ表示の行の高さは表示エリアの高さから決めるので、高さが変わったら作り直す
+        mDashboardScroll.addOnLayoutChangeListener(
+                (v, l, t, r, b, ol, ot, or, ob) -> {
+                    if (mDetectedOnly && (b - t) != (ob - ot)) {
+                        v.post(() -> {
+                            mShownMask = -1L;   // 次の refresh で作り直す
+                            refreshDashboard();
+                        });
+                    }
+                });
         mMonitorCount     = findViewById(R.id.monitor_count);
         mModeBadge        = findViewById(R.id.mode_badge);
         mMonitorLed       = findViewById(R.id.monitor_led);
@@ -294,7 +362,18 @@ public class MainActivity extends AppCompatActivity
 
         SharedPreferences prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
 
-        // 起動時のモード：解放期限内かつ ON なら 29 品目、それ以外は 9 品目
+        // プレミアム状態：まずキャッシュで即反映し、Play への照会結果で後から確定する
+        mBilling = new BillingManager(this, mBillingListener);
+        mPremium = mBilling.isPremium();
+        mOverlayView.setOutlineOnly(mPremium);
+        if (mPremium) mAdContainer.setVisibility(View.GONE);
+
+        // マイアレルゲン（プレミアム限定）
+        mMyMask    = prefs.getLong(KEY_MY_ALLERGENS, 0L);
+        mMyVibrate = prefs.getBoolean(KEY_MY_VIBRATE, true);
+        mOverlayView.setMyMask(effectiveMyMask());
+
+        // 起動時のモード：解放期限内（プレミアムは無期限）かつ ON なら 29 品目、それ以外は 9 品目
         mExpanded = shouldBeExpanded();
         mDetectedOnly = prefs.getBoolean(KEY_DETECTED_ONLY, false);
         setupMonitorLed();
@@ -317,7 +396,10 @@ public class MainActivity extends AppCompatActivity
         }
 
         // 広告 SDK の初期化はバックグラウンドで（起動・カメラを遅らせない）
-        new Thread(() -> MobileAds.initialize(this, status -> {})).start();
+        // プレミアムは広告を出さないので初期化しない（取り消し時は AdView の読み込みで自動初期化される）
+        if (!mPremium) {
+            new Thread(() -> MobileAds.initialize(this, status -> {})).start();
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -329,13 +411,20 @@ public class MainActivity extends AppCompatActivity
      * 利用規約同意後（カメラ起動時）に一度だけ呼ばれる。
      */
     private void loadBannerAd() {
-        if (mAdLoadRequested || mAdContainer == null) return;
+        if (mAdContainer == null) return;
+        if (mPremium) {                      // プレミアム：広告なし
+            mAdContainer.setVisibility(View.GONE);
+            return;
+        }
+        if (mAdLoadRequested) return;
         mAdLoadRequested = true;
 
         // コンテナの幅が確定してからサイズを決める
         mAdContainer.post(() -> {
             if (isFinishing() || isDestroyed()) return;
 
+            if (mPremium) return;            // 読み込み待ちの間に購入された場合
+            mAdContainer.setVisibility(View.VISIBLE);
             mAdView = new AdView(this);
             mAdView.setAdUnitId(getString(R.string.admob_banner_unit_id));
             mAdView.setAdSize(getAdaptiveBannerSize());
@@ -355,6 +444,255 @@ public class MainActivity extends AppCompatActivity
         return AdSize.getCurrentOrientationAnchoredAdaptiveBannerAdSize(this, adWidthDp);
     }
 
+    /** バナー広告を破棄して領域ごと非表示にする（プレミアム購入時）。 */
+    private void removeBannerAd() {
+        if (mAdView != null) {
+            mAdView.destroy();
+            mAdView = null;
+        }
+        if (mAdContainer != null) {
+            mAdContainer.removeAllViews();
+            mAdContainer.setVisibility(View.GONE);
+        }
+        mAdLoadRequested = false;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  プレミアムプラン（買い切り）
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private final BillingManager.Listener mBillingListener = new BillingManager.Listener() {
+        @Override
+        public void onPremiumChanged(boolean premium, boolean byPurchase) {
+            boolean wasPremium = mPremium;
+            applyPremium(premium);
+            if (premium && !wasPremium) {
+                // 購入 / 復元した直後は拡張モード（29品目）を ON にする
+                prefs().edit().putBoolean(KEY_EXPAND_ENABLED, true).apply();
+                applyMode(true, false);
+            }
+            if (premium && byPurchase) {
+                Toast.makeText(MainActivity.this, R.string.premium_thanks, Toast.LENGTH_LONG).show();
+            } else if (!premium && wasPremium) {
+                Toast.makeText(MainActivity.this, R.string.premium_revoked, Toast.LENGTH_LONG).show();
+            }
+        }
+
+        @Override
+        public void onPriceLoaded(@NonNull String formattedPrice) {
+            updatePremiumUi();
+        }
+
+        @Override
+        public void onPurchasePending() {
+            Toast.makeText(MainActivity.this, R.string.premium_pending, Toast.LENGTH_LONG).show();
+        }
+
+        @Override
+        public void onPurchaseFailed(int responseCode, @NonNull String debugMessage) {
+            String text = getString(R.string.premium_failed, responseCode);
+            if (!debugMessage.isEmpty()) text += "\n" + debugMessage;
+            Toast.makeText(MainActivity.this, text, Toast.LENGTH_LONG).show();
+        }
+
+        @Override
+        public void onRestoreFinished(boolean success, boolean premium) {
+            int msg = !success ? R.string.premium_restore_failed
+                    : premium   ? R.string.premium_restore_ok
+                    :             R.string.premium_restore_none;
+            Toast.makeText(MainActivity.this, msg, Toast.LENGTH_SHORT).show();
+        }
+    };
+
+    /** プレミアム状態を画面全体（広告・検出枠・拡張モード）に反映する。 */
+    private void applyPremium(boolean premium) {
+        mPremium = premium;
+        mOverlayView.setOutlineOnly(premium);
+
+        if (premium) {
+            removeBannerAd();
+        } else if (mCameraStarted) {
+            loadBannerAd();                  // 返金などで取り消された → 広告を再表示
+        }
+
+        // 期限切れ判定・バッジ・設定シートの表示を更新（取り消し時は 24h 期限の判定に戻る）
+        mHandler.removeCallbacks(mExpandTicker);
+        mExpandTicker.run();
+        applyMyAllergens();                  // マイアレルゲンの強調は購入中のみ有効
+        updatePremiumUi();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  マイアレルゲン（プレミアム限定）
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /** 実際に強調するマイアレルゲン（プレミアムでなければ 0）。 */
+    private long effectiveMyMask() {
+        return mPremium ? mMyMask : 0L;
+    }
+
+    private boolean isMine(int index) {
+        return (effectiveMyMask() & (1L << index)) != 0;
+    }
+
+    /** マイアレルゲンの変更・プレミアム状態の変化を、カメラ枠・一覧・設定に反映する。 */
+    private void applyMyAllergens() {
+        mOverlayView.setMyMask(effectiveMyMask());
+        mMyActivePrev = 0L;
+        mMonitorCount.setTag(null);          // ヘッダーを描き直す
+        buildAllergenCards();
+        refreshDashboard();
+        updateMyAllergenUi();
+    }
+
+    /** 新しく見つかったマイアレルゲンがあれば振動で知らせる。 */
+    private void notifyMyAllergens(long newlyFound) {
+        if (!mMyVibrate || newlyFound == 0) return;
+        long now = System.currentTimeMillis();
+        boolean buzz = false;
+        for (int i = 0; i < TOTAL_COUNT; i++) {
+            if ((newlyFound & (1L << i)) != 0 && now - mMyVibratedMs[i] > MY_VIBRATE_INTERVAL_MS) {
+                mMyVibratedMs[i] = now;
+                buzz = true;
+            }
+        }
+        if (buzz) vibrateTwice();
+    }
+
+    /** 「ブッ、ブッ」と短く 2 回振動。 */
+    private void vibrateTwice() {
+        Vibrator vib;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            VibratorManager vm = getSystemService(VibratorManager.class);
+            vib = vm != null ? vm.getDefaultVibrator() : null;
+        } else {
+            vib = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
+        }
+        if (vib == null || !vib.hasVibrator()) return;
+        vib.vibrate(VibrationEffect.createWaveform(new long[]{0, 120, 90, 120}, -1));
+    }
+
+    /** 設定シートのマイアレルゲン選択チップを作る（基本 9 / 準ずるもの 20）。 */
+    private void buildMyAllergenGrid() {
+        if (mMyAllergenGrid == null) return;
+        mMyAllergenGrid.removeAllViews();
+        addMyAllergenSection(getString(R.string.my_allergen_section_basic),
+                0, AllergyAnalyzer.BASIC_COUNT);
+        addMyAllergenSection(getString(R.string.my_allergen_section_ext),
+                AllergyAnalyzer.BASIC_COUNT, TOTAL_COUNT);
+    }
+
+    private void addMyAllergenSection(String title, int from, int to) {
+        TextView label = new TextView(this);
+        label.setText(title);
+        label.setTextColor(TEXT_SUB_OFF);
+        label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        label.setPadding(dp(2), dp(8), 0, dp(2));
+        mMyAllergenGrid.addView(label);
+
+        final int cols = 5;
+        final int gap  = dp(3);
+        for (int rowStart = from; rowStart < to; rowStart += cols) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setLayoutParams(new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(36)));
+            for (int c = 0; c < cols; c++) {
+                int i = rowStart + c;
+                View cell;
+                if (i < to) {
+                    TextView toggle = new TextView(this);
+                    toggle.setGravity(Gravity.CENTER);
+                    toggle.setMaxLines(1);
+                    toggle.setAutoSizeTextTypeUniformWithConfiguration(
+                            8, 13, 1, TypedValue.COMPLEX_UNIT_SP);
+                    styleMyToggle(toggle, i);
+                    final int idx = i;
+                    toggle.setOnClickListener(v -> onMyAllergenTapped(idx, (TextView) v));
+                    cell = toggle;
+                } else {
+                    cell = new View(this);
+                }
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                        0, ViewGroup.LayoutParams.MATCH_PARENT, 1f);
+                lp.setMargins(gap, gap, gap, gap);
+                cell.setLayoutParams(lp);
+                row.addView(cell);
+            }
+            mMyAllergenGrid.addView(row);
+        }
+    }
+
+    /** 選択チップの見た目：選択中 = ゴールド枠＋★、未選択 = 暗いチップ。 */
+    private void styleMyToggle(TextView toggle, int index) {
+        boolean on = (mMyMask & (1L << index)) != 0;
+        String name = AllergyAnalyzer.getAllergenShortJa()[index];
+        GradientDrawable bg = new GradientDrawable();
+        bg.setCornerRadius(dp(8));
+        if (on) {
+            bg.setColor(Color.parseColor("#FF2A2210"));
+            bg.setStroke(dp(2), ACCENT_GOLD);
+            toggle.setTextColor(ACCENT_GOLD);
+            toggle.setTypeface(Typeface.DEFAULT_BOLD);
+            toggle.setText("★" + name);
+        } else {
+            bg.setColor(Color.parseColor("#FF0D1117"));
+            bg.setStroke(dp(1), Color.parseColor("#FF30363D"));
+            toggle.setTextColor(TEXT_OFF);
+            toggle.setTypeface(Typeface.DEFAULT);
+            toggle.setText(name);
+        }
+        toggle.setBackground(bg);
+    }
+
+    private void onMyAllergenTapped(int index, TextView toggle) {
+        if (!mPremium) {
+            Toast.makeText(this, R.string.my_allergen_locked, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        mMyMask ^= (1L << index);
+        prefs().edit().putLong(KEY_MY_ALLERGENS, mMyMask).apply();
+        styleMyToggle(toggle, index);
+        applyMyAllergens();
+    }
+
+    /** 設定シートのマイアレルゲンカード：無料版はロック表示（選択不可・半透明）。 */
+    private void updateMyAllergenUi() {
+        if (mMyAllergenGrid == null) return;
+        mMyAllergenGrid.setAlpha(mPremium ? 1f : 0.45f);
+        mMyAllergenLock.setVisibility(mPremium ? View.GONE : View.VISIBLE);
+        mMyVibrateSwitch.setEnabled(mPremium);
+    }
+
+    /** 設定シートのプレミアムカード（価格ボタン / 購入済み表示）を更新。 */
+    private void updatePremiumUi() {
+        if (mPremiumBuyBtn == null) return;
+        if (mPremium) {
+            mPremiumStatus.setVisibility(View.VISIBLE);
+            mPremiumBuyBtn.setVisibility(View.GONE);
+            mPremiumRestore.setVisibility(View.GONE);
+        } else {
+            mPremiumStatus.setVisibility(View.GONE);
+            mPremiumBuyBtn.setVisibility(View.VISIBLE);
+            mPremiumRestore.setVisibility(View.VISIBLE);
+            mPremiumBuyBtn.setEnabled(true);   // 価格の取得前でも押せる（押すと再取得を試みる）
+            String price = mBilling != null ? mBilling.getFormattedPrice() : null;
+            if (price != null) {
+                mPremiumBuyBtn.setText(getString(R.string.premium_buy, price));
+                mPremiumBuyBtn.setAlpha(1f);
+            } else {
+                mPremiumBuyBtn.setText(R.string.premium_price_loading);
+                mPremiumBuyBtn.setAlpha(0.6f);
+            }
+        }
+    }
+
+    private void startPremiumPurchase() {
+        if (mBilling == null || !mBilling.launchPurchase(this)) {
+            Toast.makeText(this, R.string.premium_unavailable, Toast.LENGTH_LONG).show();
+        }
+    }
+
     @Override
     protected void onPause() {
         if (mAdView != null) mAdView.pause();
@@ -369,10 +707,35 @@ public class MainActivity extends AppCompatActivity
         // バックグラウンド中に期限切れになっていないか確認し、カウントダウンを再開
         mHandler.removeCallbacks(mExpandTicker);
         mExpandTicker.run();
+        // 保留中だった支払いの完了・返金などを反映
+        if (mBilling != null) mBilling.refreshPurchases();
+
+        if (mNotifyExpiredOnResume) {
+            mNotifyExpiredOnResume = false;
+            Toast.makeText(this, R.string.expand_expired, Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /**
+     * アプリがバックグラウンドに回った（ホーム・アプリ切替・画面オフ）。
+     * 解放時間が終わっていれば、ここで初めて 9 品目に戻す（使用中には切らない）。
+     *
+     * onPause ではなく onStop を使うのは、リワード動画や Google Play の購入画面など
+     * アプリの上に重なる画面では onPause しか呼ばれず、そこで戻すと不自然なため。
+     */
+    @Override
+    protected void onStop() {
+        if (mExpanded && !isExpandUnlocked()) {
+            prefs().edit().putBoolean(KEY_EXPAND_ENABLED, false).apply();
+            mGraceActive = false;
+            applyMode(false, false);
+            mNotifyExpiredOnResume = true;
+        }
+        super.onStop();
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    //  拡張モード（20品目追加 / リワード動画で 24 時間解放）
+    //  拡張モード（20品目追加 / リワード動画で 1 時間解放）
     // ─────────────────────────────────────────────────────────────────────────
 
     private SharedPreferences prefs() {
@@ -389,31 +752,54 @@ public class MainActivity extends AppCompatActivity
         return remain;
     }
 
+    /** 拡張モードを使えるか（プレミアムは無期限、それ以外は動画視聴から 1 時間）。 */
     private boolean isExpandUnlocked() {
-        return remainingUnlockMs() > 0;
+        return mPremium || remainingUnlockMs() > 0;
     }
 
     private boolean shouldBeExpanded() {
         return isExpandUnlocked() && prefs().getBoolean(KEY_EXPAND_ENABLED, false);
     }
 
-    /** 1 秒ごと：カウントダウン表示の更新と期限切れチェック。 */
+    /**
+     * 1 秒ごと：カウントダウン表示の更新と期限切れチェック。
+     * 画面表示中（onResume〜onPause）だけ動くので、ここで期限切れを検知した＝使用中。
+     * → 途中で切らずに「延長中」へ移り、9 品目への切り替えは onStop に任せる。
+     */
     private final Runnable mExpandTicker = new Runnable() {
         @Override
         public void run() {
-            if (mExpanded && !isExpandUnlocked()) {
-                prefs().edit().putBoolean(KEY_EXPAND_ENABLED, false).apply();
-                applyMode(false, false);
-                Toast.makeText(MainActivity.this, R.string.expand_expired, Toast.LENGTH_LONG).show();
+            if (isExpandUnlocked()) {
+                mGraceActive = false;          // 動画の再視聴・購入で延長中は解除
+            }
+            if (mExpanded && !isExpandUnlocked() && !mGraceActive) {
+                mGraceActive = true;
+                showGraceNotice();
             } else if (!mExpanded && shouldBeExpanded()) {
                 applyMode(true, false);
             }
             updateExpandUi();
-            if (mExpanded || mSettingsSheet != null) {
+            // プレミアムは期限がないので、設定シート表示中以外はカウントダウン不要
+            if ((mExpanded && !mPremium) || mSettingsSheet != null) {
                 mHandler.postDelayed(this, 1000);
             }
         }
     };
+
+    /**
+     * 延長中に入ったことを知らせる（タイマーが 0 なのに使える＝バグ、と思われないように）。
+     * スキャンの邪魔にならないよう、ダイアログではなく画面下の Snackbar で表示する。
+     */
+    private void showGraceNotice() {
+        View root = findViewById(R.id.main);
+        if (root == null) return;
+        Snackbar bar = Snackbar.make(root, R.string.expand_grace_notice, 8000);
+        bar.setAction(R.string.expand_grace_action, v -> showSettingsSheet());
+        bar.setActionTextColor(ACCENT_GOLD);
+        TextView tv = bar.getView().findViewById(com.google.android.material.R.id.snackbar_text);
+        if (tv != null) tv.setMaxLines(3);
+        bar.show();
+    }
 
     private void restartExpandTicker() {
         mHandler.removeCallbacks(mExpandTicker);
@@ -500,20 +886,32 @@ public class MainActivity extends AppCompatActivity
         if (mModeBadge != null) {
             if (mExpanded) {
                 mModeBadge.setVisibility(View.VISIBLE);
-                mModeBadge.setText("+20  " + hms);
+                mModeBadge.setText(mPremium     ? "+20  PREMIUM"
+                                 : mGraceActive ? getString(R.string.expand_badge_grace)
+                                 :                "+20  " + hms);
             } else {
                 mModeBadge.setVisibility(View.GONE);
             }
         }
 
         if (mExpandStatus != null) {
-            if (remain > 0) {
+            if (mPremium) {
+                mExpandStatus.setText(R.string.expand_status_premium);
+                mExpandStatus.setTextColor(ACCENT_GOLD);
+            } else if (remain > 0) {
                 mExpandStatus.setText(getString(R.string.expand_status_unlocked, hms));
+                mExpandStatus.setTextColor(ACCENT_AMBER);
+            } else if (mGraceActive && mExpanded) {
+                mExpandStatus.setText(R.string.expand_status_grace);
                 mExpandStatus.setTextColor(ACCENT_AMBER);
             } else {
                 mExpandStatus.setText(R.string.expand_status_locked);
                 mExpandStatus.setTextColor(TEXT_SUB_OFF);
             }
+        }
+        if (mExpandDesc != null) {
+            mExpandDesc.setText(mPremium ? R.string.settings_expand_desc_premium
+                                         : R.string.settings_expand_desc);
         }
         if (mExpandSwitch != null) {
             setSwitchSilently(mExpanded);
@@ -539,7 +937,29 @@ public class MainActivity extends AppCompatActivity
 
         mExpandSwitch = content.findViewById(R.id.switch_expand);
         mExpandStatus = content.findViewById(R.id.text_expand_status);
+        mExpandDesc   = content.findViewById(R.id.text_expand_desc);
         styleSwitch(mExpandSwitch);
+
+        // ── プレミアムプラン ──
+        mPremiumBuyBtn  = content.findViewById(R.id.btn_premium_buy);
+        mPremiumStatus  = content.findViewById(R.id.text_premium_status);
+        mPremiumRestore = content.findViewById(R.id.btn_premium_restore);
+        mPremiumBuyBtn.setOnClickListener(v -> startPremiumPurchase());
+        mPremiumRestore.setOnClickListener(v -> mBilling.restore());
+        updatePremiumUi();
+
+        // ── マイアレルゲン（プレミアム限定） ──
+        mMyAllergenGrid  = content.findViewById(R.id.my_allergen_grid);
+        mMyAllergenLock  = content.findViewById(R.id.text_my_allergen_lock);
+        mMyVibrateSwitch = content.findViewById(R.id.switch_my_vibrate);
+        styleSwitch(mMyVibrateSwitch);
+        mMyVibrateSwitch.setChecked(mMyVibrate);
+        mMyVibrateSwitch.setOnCheckedChangeListener((b, checked) -> {
+            mMyVibrate = checked;
+            prefs().edit().putBoolean(KEY_MY_VIBRATE, checked).apply();
+        });
+        buildMyAllergenGrid();
+        updateMyAllergenUi();
 
         content.findViewById(R.id.btn_close_settings).setOnClickListener(v -> sheet.dismiss());
 
@@ -557,6 +977,7 @@ public class MainActivity extends AppCompatActivity
                 }
             } else {
                 prefs().edit().putBoolean(KEY_EXPAND_ENABLED, false).apply();
+                mGraceActive = false;
                 applyMode(false, false);
             }
         });
@@ -572,6 +993,13 @@ public class MainActivity extends AppCompatActivity
             mSettingsSheet = null;
             mExpandSwitch  = null;
             mExpandStatus  = null;
+            mExpandDesc    = null;
+            mPremiumBuyBtn  = null;
+            mPremiumStatus  = null;
+            mPremiumRestore = null;
+            mMyAllergenGrid  = null;
+            mMyAllergenLock  = null;
+            mMyVibrateSwitch = null;
         });
 
         // ── 表示モード（全品目 / 検出のみ）──
@@ -706,6 +1134,7 @@ public class MainActivity extends AppCompatActivity
 
     /** 動画視聴完了後（広告を閉じたあと）に呼ばれる。 */
     private void onExpandUnlocked() {
+        mGraceActive = false;
         applyMode(true, false);
         Toast.makeText(this, R.string.reward_granted, Toast.LENGTH_SHORT).show();
     }
@@ -856,6 +1285,10 @@ public class MainActivity extends AppCompatActivity
             mAdView = null;
         }
         dismissRewardLoadingDialog();
+        if (mBilling != null) {
+            mBilling.destroy();
+            mBilling = null;
+        }
         if (mSettingsSheet != null) mSettingsSheet.dismiss();
         if (mLedAnimator != null) mLedAnimator.cancel();
         super.onDestroy();
@@ -886,20 +1319,53 @@ public class MainActivity extends AppCompatActivity
         if (mDetectedOnly) {
             // 検出のみ表示：中身は refreshDashboard() → rebuildDetectedList() で描く
         } else if (!mExpanded) {
-            buildGrid(0, AllergyAnalyzer.BASIC_COUNT, 3, false);
+            // 9 品目：マイアレルゲンを先頭に並べる
+            buildGrid(concat(collectIndices(0, AllergyAnalyzer.BASIC_COUNT, true),
+                             collectIndices(0, AllergyAnalyzer.BASIC_COUNT, false)), 3, false);
         } else {
-            mDashboardContent.addView(makeSectionLabel("特定原材料など", 9, false));
-            buildGrid(0, AllergyAnalyzer.BASIC_COUNT, 5, true);
-            mDashboardContent.addView(makeSectionLabel("準ずるもの", 20, true));
-            buildGrid(AllergyAnalyzer.BASIC_COUNT, TOTAL_COUNT, 5, true);
+            // 29 品目：先頭に「★ マイアレルゲン」セクション、残りを従来のセクションに
+            int[] mine  = collectIndices(0, TOTAL_COUNT, true);
+            int[] basic = collectIndices(0, AllergyAnalyzer.BASIC_COUNT, false);
+            int[] ext   = collectIndices(AllergyAnalyzer.BASIC_COUNT, TOTAL_COUNT, false);
+            if (mine.length > 0) {
+                mDashboardContent.addView(makeSectionLabel("★ マイアレルゲン", mine.length, false));
+                buildGrid(mine, 5, true);
+            }
+            if (basic.length > 0) {
+                mDashboardContent.addView(makeSectionLabel("特定原材料など", basic.length, false));
+                buildGrid(basic, 5, true);
+            }
+            if (ext.length > 0) {
+                mDashboardContent.addView(makeSectionLabel("準ずるもの", ext.length, true));
+                buildGrid(ext, 5, true);
+            }
         }
         mDashboardScroll.scrollTo(0, 0);
     }
 
-    /** Adds rows of chips for allergen indices [from, to) with {@code cols} columns. */
-    private void buildGrid(int from, int to, int cols, boolean compact) {
+    /** [from, to) のうちマイアレルゲン（mine=true）/ それ以外（mine=false）の index。 */
+    private int[] collectIndices(int from, int to, boolean mine) {
+        List<Integer> list = new ArrayList<>();
+        for (int i = from; i < to; i++) {
+            if (isMine(i) == mine) list.add(i);
+        }
+        int[] out = new int[list.size()];
+        for (int k = 0; k < out.length; k++) out[k] = list.get(k);
+        return out;
+    }
+
+    private static int[] concat(int[] a, int[] b) {
+        int[] out = new int[a.length + b.length];
+        System.arraycopy(a, 0, out, 0, a.length);
+        System.arraycopy(b, 0, out, a.length, b.length);
+        return out;
+    }
+
+    /** Adds rows of chips for the given allergen indices with {@code cols} columns. */
+    private void buildGrid(int[] indices, int cols, boolean compact) {
         final int gap = dp(3);
-        for (int rowStart = from; rowStart < to; rowStart += cols) {
+        final int n   = indices.length;
+        for (int rowStart = 0; rowStart < n; rowStart += cols) {
             LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
 
@@ -915,9 +1381,10 @@ public class MainActivity extends AppCompatActivity
             row.setLayoutParams(rowLp);
 
             for (int c = 0; c < cols; c++) {
-                int i = rowStart + c;
+                int k = rowStart + c;
                 View cell;
-                if (i < to) {
+                if (k < n) {
+                    int i = indices[k];
                     TextView chip = makeChip(i, compact);
                     mAllergenCards[i] = chip;
                     cell = chip;
@@ -942,7 +1409,7 @@ public class MainActivity extends AppCompatActivity
         chip.setPadding(dp(compact ? 4 : 8), 0, dp(compact ? 4 : 8), 0);
 
         if (compact) {
-            chip.setText(AllergyAnalyzer.getAllergenShortJa()[index]);
+            chip.setText((isMine(index) ? "★" : "") + AllergyAnalyzer.getAllergenShortJa()[index]);
             chip.setMaxLines(1);
             chip.setEllipsize(TextUtils.TruncateAt.END);
             chip.setAutoSizeTextTypeUniformWithConfiguration(
@@ -970,6 +1437,7 @@ public class MainActivity extends AppCompatActivity
             bg.setColor(CHIP_BG_OFF);
             bg.setStroke(dp(1), CHIP_STROKE_OFF);
         }
+        if (isMine(index)) bg.setStroke(dp(2), ACCENT_GOLD);   // マイアレルゲン：ゴールド枠
         bg.setCornerRadius(radius);
         chip.setBackground(bg);
 
@@ -992,7 +1460,7 @@ public class MainActivity extends AppCompatActivity
             chip.setTextColor(active ? TEXT_ON : TEXT_OFF);
             chip.setTypeface(Typeface.DEFAULT, active ? Typeface.BOLD : Typeface.NORMAL);
         } else {
-            String ja = AllergyAnalyzer.getAllergenNamesJa()[index];
+            String ja = (isMine(index) ? "★" : "") + AllergyAnalyzer.getAllergenNamesJa()[index];
             String en = AllergyAnalyzer.getAllergenNamesEn()[index].toUpperCase(Locale.US);
             SpannableStringBuilder sb = new SpannableStringBuilder();
             sb.append(ja);
@@ -1082,6 +1550,7 @@ public class MainActivity extends AppCompatActivity
     // ─────────────────────────────────────────────────────────────────────────
 
     private void startCamera() {
+        mCameraStarted = true;
         loadBannerAd();
 
         ListenableFuture<ProcessCameraProvider> providerFuture =
@@ -1091,13 +1560,17 @@ public class MainActivity extends AppCompatActivity
             try {
                 ProcessCameraProvider cameraProvider = providerFuture.get();
 
-                Preview preview = new Preview.Builder().build();
-                preview.setSurfaceProvider(mPreviewView.getSurfaceProvider());
-
+                // プレビューと文字認識の画像を同じ 16:9 にそろえる。
+                // （以前はプレビューが既定の 4:3 で、枠が実際の文字から上下にずれていた）
                 ResolutionSelector resolutionSelector = new ResolutionSelector.Builder()
                         .setAspectRatioStrategy(
                                 AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
                         .build();
+
+                Preview preview = new Preview.Builder()
+                        .setResolutionSelector(resolutionSelector)
+                        .build();
+                preview.setSurfaceProvider(mPreviewView.getSurfaceProvider());
 
                 ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
                         .setResolutionSelector(resolutionSelector)
@@ -1270,7 +1743,12 @@ public class MainActivity extends AppCompatActivity
             mShownMask = mask;
         }
 
-        updateMonitorHeader(numActive);
+        // マイアレルゲン：新しく見つかった瞬間に振動、ヘッダーに件数
+        long myActive = mask & effectiveMyMask();
+        notifyMyAllergens(myActive & ~mMyActivePrev);
+        mMyActivePrev = myActive;
+
+        updateMonitorHeader(numActive, Long.bitCount(myActive));
 
         if (numActive > 0) {
             mHandler.removeCallbacks(mDashboardTimeoutRunnable);
@@ -1288,9 +1766,12 @@ public class MainActivity extends AppCompatActivity
     private void rebuildDetectedList(long mask, long added) {
         mDashboardContent.removeAllViews();
 
+        // マイアレルゲンを先頭に
         List<Integer> items = new ArrayList<>();
-        for (int i = 0; i < visibleCount(); i++) {
-            if ((mask & (1L << i)) != 0) items.add(i);
+        for (int pass = 0; pass < 2; pass++) {
+            for (int i = 0; i < visibleCount(); i++) {
+                if ((mask & (1L << i)) != 0 && isMine(i) == (pass == 0)) items.add(i);
+            }
         }
 
         if (items.isEmpty()) {
@@ -1298,13 +1779,14 @@ public class MainActivity extends AppCompatActivity
             return;
         }
 
-        final int cols = items.size() == 1 ? 1 : 2;
-        final int gap  = dp(4);
+        final int cols  = items.size() == 1 ? 1 : DETECTED_COLS;
+        final int gap   = dp(4);
+        final int rowH  = detectedRowHeight();
         for (int r = 0; r < items.size(); r += cols) {
             LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.setLayoutParams(new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, dp(66)));
+                    ViewGroup.LayoutParams.MATCH_PARENT, rowH));
 
             for (int c = 0; c < cols; c++) {
                 int k = r + c;
@@ -1328,6 +1810,21 @@ public class MainActivity extends AppCompatActivity
         mDashboardScroll.scrollTo(0, 0);
     }
 
+    /**
+     * 検出のみ表示の 1 行の高さ。
+     * 表示エリアに最低 DETECTED_MIN_VISIBLE 件（2 列 × 5 行）が収まる高さにする。
+     * それを超える件数はスクロールで表示。エリアに余裕があれば最大 66dp。
+     */
+    private int detectedRowHeight() {
+        final int maxH = dp(DETECTED_ROW_MAX_DP);
+        int avail = mDashboardScroll.getHeight()
+                - mDashboardScroll.getPaddingTop() - mDashboardScroll.getPaddingBottom()
+                - mDashboardContent.getPaddingTop() - mDashboardContent.getPaddingBottom();
+        if (avail <= 0) return maxH;   // まだレイアウト前（確定後に作り直される）
+        int rows = (DETECTED_MIN_VISIBLE + DETECTED_COLS - 1) / DETECTED_COLS;
+        return Math.min(maxH, avail / rows);
+    }
+
     /** 検出のみ表示用の大きなカード（日本語を最大 30sp、英語を小さく併記）。 */
     private TextView makeBigChip(int index) {
         TextView chip = new TextView(this);
@@ -1337,7 +1834,7 @@ public class MainActivity extends AppCompatActivity
         chip.setCompoundDrawablePadding(dp(10));
         styleChip(chip, index, true, false);   // 背景・LED を「検出中」スタイルに
 
-        String ja = AllergyAnalyzer.getAllergenNamesJa()[index];
+        String ja = (isMine(index) ? "★" : "") + AllergyAnalyzer.getAllergenNamesJa()[index];
         String en = AllergyAnalyzer.getAllergenNamesEn()[index].toUpperCase(Locale.US);
         SpannableStringBuilder sb = new SpannableStringBuilder(ja);
         sb.setSpan(new StyleSpan(Typeface.BOLD), 0, ja.length(),
@@ -1353,7 +1850,7 @@ public class MainActivity extends AppCompatActivity
         chip.setMaxLines(2);
         // 長い名前（マカダミアナッツ等）は枠に収まるまで自動縮小
         chip.setAutoSizeTextTypeUniformWithConfiguration(
-                14, 30, 1, TypedValue.COMPLEX_UNIT_SP);
+                10, 30, 1, TypedValue.COMPLEX_UNIT_SP);
         return chip;
     }
 
@@ -1396,10 +1893,10 @@ public class MainActivity extends AppCompatActivity
     private int mLastHeaderActive = -1;
 
     /** ヘッダー：「29品目」＋ 検出数、LED の色。 */
-    private void updateMonitorHeader(int numActive) {
+    private void updateMonitorHeader(int numActive, int myActive) {
         String total = visibleCount() + "品目";
-        String key   = total + numActive;
-        if (numActive == mLastHeaderActive && key.equals(mMonitorCount.getTag())) return;
+        String key   = total + numActive + "/" + myActive;
+        if (key.equals(mMonitorCount.getTag())) return;
         mLastHeaderActive = numActive;
         mMonitorCount.setTag(key);
 
@@ -1408,6 +1905,14 @@ public class MainActivity extends AppCompatActivity
             int s = sb.length();
             sb.append("  ▲").append(String.valueOf(numActive)).append("件検出");
             sb.setSpan(new ForegroundColorSpan(ACCENT_RED), s, sb.length(),
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
+        if (myActive > 0) {
+            int s = sb.length();
+            sb.append("  ★").append(String.valueOf(myActive)).append("件");
+            sb.setSpan(new ForegroundColorSpan(ACCENT_GOLD), s, sb.length(),
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            sb.setSpan(new StyleSpan(Typeface.BOLD), s, sb.length(),
                     Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         }
         mMonitorCount.setText(sb);

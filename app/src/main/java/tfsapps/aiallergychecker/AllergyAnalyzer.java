@@ -49,7 +49,7 @@ public class AllergyAnalyzer implements ImageAnalysis.Analyzer {
     // ── Allergen definitions ──────────────────────────────────────────────────
     //
     //  [基本 9 品目]  index 0–8   … 常に検出
-    //  [拡張 20 品目] index 9–28  … 特定原材料に準ずるもの（動画視聴で 24 時間解放）
+    //  [拡張 20 品目] index 9–28  … 特定原材料に準ずるもの（動画視聴で 1 時間解放）
     //
     //  Index  0 = 卵          Index  9 = 牛肉        Index 19 = アーモンド
     //  Index  1 = 乳          Index 10 = 鶏肉        Index 20 = マカダミアナッツ
@@ -334,7 +334,11 @@ public class AllergyAnalyzer implements ImageAnalysis.Analyzer {
                         if (containsAllergenKeyword(lineText, keyword, excludes)) {
                             detectedIndices.add(i);
 
-                            AllergenBox ab = findKeywordBox(line.getElements(), keyword, excludes);
+                            // 文字単位（Symbol）でキーワードの文字だけを囲む（iOS と同じ表示）
+                            AllergenBox ab = findKeywordCharBox(line, keyword, excludes);
+                            if (ab == null) {
+                                ab = findKeywordBox(line.getElements(), keyword, excludes);
+                            }
                             if (ab != null) {
                                 // Attach allergen index and keep only the topmost box
                                 AllergenBox abIndexed = new AllergenBox(ab.rect, ab.confidence, i);
@@ -398,15 +402,25 @@ public class AllergyAnalyzer implements ImageAnalysis.Analyzer {
     static boolean containsAllergenKeyword(@NonNull String text,
                                            @NonNull String keyword,
                                            @NonNull String[] excludes) {
+        return indexOfAllergenKeyword(text, keyword, excludes) >= 0;
+    }
+
+    /**
+     * {@link #containsAllergenKeyword} と同じ判定で、最初の「本物の」出現位置を返す。
+     * 見つからなければ -1。
+     */
+    static int indexOfAllergenKeyword(@NonNull String text,
+                                      @NonNull String keyword,
+                                      @NonNull String[] excludes) {
         int idx = 0;
         while ((idx = text.indexOf(keyword, idx)) >= 0) {
             if (!isSurroundedByKatakana(text, idx, keyword.length())
                     && !isPartOfExcludedWord(text, idx, keyword, excludes)) {
-                return true; // genuine occurrence found
+                return idx; // genuine occurrence found
             }
             idx += keyword.length();
         }
-        return false;
+        return -1;
     }
 
     /**
@@ -452,6 +466,79 @@ public class AllergyAnalyzer implements ImageAnalysis.Analyzer {
     }
 
     // ── Element-level box finding ─────────────────────────────────────────────
+
+    /**
+     * キーワードの文字だけを囲む枠を求める（文字単位）。
+     *
+     * 日本語は単語の間に空白が無いため、ML Kit の Element は行のほぼ全体になることが多い。
+     * そこで行内の全 Element の Symbol（1 文字ごとの枠）を並べた文字列を作り、
+     * キーワードの出現位置に当たる文字の枠だけを結合する。
+     * Symbol が取れない Element は、その枠を文字数で等分して近似する。
+     *
+     * 信頼度は従来どおり Element の信頼度（該当文字を含む Element の最小値）を使う。
+     */
+    private static AllergenBox findKeywordCharBox(@NonNull Text.Line line,
+                                                  @NonNull String keyword,
+                                                  @NonNull String[] excludes) {
+        StringBuilder    chars = new StringBuilder();
+        List<Rect>       rects = new ArrayList<>();
+        List<Float>      confs = new ArrayList<>();
+
+        for (Text.Element element : line.getElements()) {
+            float elemConf = element.getConfidence();
+            List<Text.Symbol> symbols = element.getSymbols();
+
+            if (symbols != null && !symbols.isEmpty()) {
+                for (Text.Symbol sym : symbols) {
+                    String t = sym.getText();
+                    Rect   r = sym.getBoundingBox();
+                    for (int k = 0; k < t.length(); k++) {
+                        chars.append(t.charAt(k));
+                        rects.add(r);
+                        confs.add(elemConf);
+                    }
+                }
+            } else {
+                // Symbol が無い場合：Element の枠を文字数で等分（縦書きなら縦方向に等分）
+                String t = element.getText();
+                Rect   b = element.getBoundingBox();
+                int    n = t.length();
+                for (int k = 0; k < n; k++) {
+                    chars.append(t.charAt(k));
+                    rects.add(b == null ? null : sliceRect(b, k, n));
+                    confs.add(elemConf);
+                }
+            }
+        }
+
+        int idx = indexOfAllergenKeyword(chars.toString(), keyword, excludes);
+        if (idx < 0) return null;
+
+        Rect  union   = null;
+        float minConf = 1f;
+        for (int k = idx; k < idx + keyword.length() && k < rects.size(); k++) {
+            Rect r = rects.get(k);
+            if (r != null) {
+                if (union == null) union = new Rect(r);
+                else               union.union(r);
+            }
+            minConf = Math.min(minConf, confs.get(k));
+        }
+        return union != null ? new AllergenBox(union, minConf) : null;
+    }
+
+    /** 枠 {@code b} を {@code n} 等分した {@code k} 番目（横長なら横方向、縦長なら縦方向）。 */
+    private static Rect sliceRect(@NonNull Rect b, int k, int n) {
+        if (b.width() >= b.height()) {
+            int l = b.left + b.width() * k / n;
+            int r = b.left + b.width() * (k + 1) / n;
+            return new Rect(l, b.top, r, b.bottom);
+        } else {
+            int t  = b.top + b.height() * k / n;
+            int bo = b.top + b.height() * (k + 1) / n;
+            return new Rect(b.left, t, b.right, bo);
+        }
+    }
 
     /**
      * Find an {@link AllergenBox} (rect + confidence) for {@code keyword} in

@@ -10,10 +10,10 @@
     <!-- ═══ 設定 / 拡張モード（20品目追加） ═══ -->
     <string name="settings_title">設定</string>
     <string name="settings_expand_title">拡張モード</string>
-    <string name="settings_expand_desc">特定原材料に準ずるもの20品目を追加して、計29品目を検出します。動画を1本見ると24時間使えます。</string>
+    <string name="settings_expand_desc">特定原材料に準ずるもの20品目を追加して、計29品目を検出します。動画を1本見ると1時間使えます。</string>
     <string name="settings_expand_items_header">追加される20品目</string>
     <string name="settings_expand_items">肉類　　　牛肉・鶏肉・豚肉\n魚介類　　あわび・いか・いくら・さけ・さば\n豆・種実類　大豆・ごま・アーモンド・マカダミアナッツ\n果物・野菜　オレンジ・キウイフルーツ・バナナ・もも・りんご・やまいも\nその他　　ピスタチオ・ゼラチン</string>
-    <string name="settings_expand_note">※ 解放中はスイッチでいつでも 9品目 ⇄ 29品目 を切り替えられます。24時間が経過すると自動的に9品目に戻ります。</string>
+    <string name="settings_expand_note">※ 解放中はスイッチでいつでも 9品目 ⇄ 29品目 を切り替えられます。1時間が経過しても使用中は途中で切れず、アプリを閉じたときに9品目に戻ります。</string>
     <string name="settings_close">閉じる</string>
     <string name="settings_display_title">表示モード</string>
     <string name="settings_display_desc">「検出のみ」にすると、見つかったアレルゲンだけを大きな文字で表示します。小さな文字が読みづらいときにおすすめです。</string>
@@ -21,27 +21,62 @@
     <string name="settings_display_detected">検出のみ表示</string>
     <string name="detected_only_empty">対象品目は未検出</string>
     <string name="detected_only_empty_note">※ 最終判断は必ず原材料表示を目視で確認してください</string>
-    <string name="expand_status_locked">LOCKED ─ 動画視聴で24時間解放</string>
+    <string name="expand_status_locked">LOCKED ─ 動画視聴で1時間解放</string>
     <string name="expand_status_unlocked">UNLOCKED ─ 残り %1$s</string>
-    <string name="reward_confirm_title">20品目を24時間解放</string>
-    <string name="reward_confirm_message">短い動画広告を最後まで視聴すると、拡張モード（29品目検出）が24時間使えるようになります。</string>
+    <string name="reward_confirm_title">20品目を1時間解放</string>
+    <string name="reward_confirm_message">短い動画広告を最後まで視聴すると、拡張モード（29品目検出）が1時間使えるようになります。</string>
     <string name="reward_confirm_watch">動画を見る</string>
     <string name="reward_confirm_cancel">キャンセル</string>
     <string name="reward_loading">動画を読み込み中…</string>
     <string name="reward_load_failed">動画を読み込めませんでした。通信環境を確認して、しばらくしてからお試しください。</string>
     <string name="reward_not_earned">動画を最後まで視聴すると解放されます。</string>
-    <string name="reward_granted">拡張モードを24時間解放しました（29品目）</string>
-    <string name="expand_expired">拡張モードの有効期限が切れたため、9品目に戻しました</string>
+    <string name="reward_granted">拡張モードを1時間解放しました（29品目）</string>
+    <string name="expand_expired">拡張モードの時間が終了したため、9品目に戻しました</string>
+    <string name="expand_grace_notice">拡張モードの1時間が終了しました。使用中はこのまま29品目を検出し、アプリを閉じると9品目に戻ります。</string>
+    <string name="expand_grace_action">延長・購入</string>
+    <string name="expand_badge_grace">+20  延長中</string>
+    <string name="expand_status_grace">時間終了 ─ 延長中（アプリを閉じると9品目に戻ります）</string>
+
+    <!-- ═══ プレミアムプラン（買い切り） ═══ -->
+    <string name="premium_title">プレミアムプラン</string>
+    <string name="premium_tag">買い切り</string>
+    <string name="premium_benefits">✓ 広告を非表示\n✓ 拡張モード（29品目）を期限なしで利用\n✓ アレルゲン文字を四角枠で囲んで表示\n✓ マイアレルゲンを★で強調・振動でお知らせ</string>
+    <string name="premium_price_loading">価格を取得中…</string>
+    <string name="premium_buy">%1$s で購入</string>
+    <string name="premium_status_owned">✓ 購入済み ─ すべてのプレミアム機能が有効です</string>
+    <string name="premium_restore">購入を復元</string>
+    <string name="premium_thanks">ご購入ありがとうございます！プレミアム機能が有効になりました</string>
+    <string name="premium_pending">お支払いの完了待ちです。完了すると自動で有効になります</string>
+    <string name="premium_failed">購入を完了できませんでした（コード %1$d）。しばらくしてからお試しください</string>
+    <string name="premium_unavailable">Google Play に接続できません。通信環境を確認してお試しください</string>
+    <string name="premium_restore_ok">購入を復元しました</string>
+    <string name="premium_restore_none">復元できる購入が見つかりませんでした</string>
+    <string name="premium_restore_failed">Google Play に接続できませんでした。しばらくしてからお試しください</string>
+    <string name="premium_revoked">プレミアムプランが無効になりました</string>
+    <string name="settings_expand_desc_premium">特定原材料に準ずるもの20品目を追加して、計29品目を検出します。プレミアムプランのため期限なしで使えます。</string>
+    <string name="expand_status_premium">PREMIUM ─ 期限なし</string>
+
+    <!-- ═══ マイアレルゲン（プレミアム限定） ═══ -->
+    <string name="my_allergen_title">マイアレルゲン</string>
+    <string name="my_allergen_desc">あなたのアレルゲンを選んでおくと、見つけたときに★付きの二重枠と名前で強調し、一覧の先頭に表示して振動でお知らせします。</string>
+    <string name="my_allergen_locked">🔒 プレミアムプランで使えます</string>
+    <string name="my_allergen_vibrate">見つけたときに振動する</string>
+    <string name="my_allergen_section_basic">特定原材料など</string>
+    <string name="my_allergen_section_ext">準ずるもの（拡張モードONのときに検出）</string>
 
     <!-- ═══ AdMob ═══
          バナー：本番 ID
          リワード：Google 公式のテスト用 ID（リリース前に本番の広告ユニット ID に差し替えてください） -->
+
     <string name="admob_app_id" translatable="false">ca-app-pub-4924620089567925~9406941098</string>
     <string name="admob_banner_unit_id" translatable="false">ca-app-pub-4924620089567925/3020045386</string>
     <string name="admob_rewarded_unit_id" translatable="false">ca-app-pub-4924620089567925/4262265867</string>
+
     <!--
     <string name="admob_app_id" translatable="false">ca-app-pub-3940256099942544~3347511713</string>
     <string name="admob_banner_unit_id" translatable="false">ca-app-pub-3940256099942544/9214589741</string>
     <string name="admob_rewarded_unit_id" translatable="false">ca-app-pub-3940256099942544/5224354917</string>
+
     -->
+
 </resources>
